@@ -1,9 +1,41 @@
+/*
+  USBAPI.h
+  Copyright (c) 2005-2014 Arduino.  All right reserved.
 
+  This library is free software; you can redistribute it and/or
+  modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation; either
+  version 2.1 of the License, or (at your option) any later version.
+
+  This library is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public
+  License along with this library; if not, write to the Free Software
+  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+*/
 
 #ifndef __USBAPI__
 #define __USBAPI__
 
+#include <inttypes.h>
+#include <avr/pgmspace.h>
+#include <avr/eeprom.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned long u32;
+
+#include "Arduino.h"
+
 #if defined(USBCON)
+
+#include "USBDesc.h"
+#include "USBCore.h"
 
 //================================================================================
 //================================================================================
@@ -25,6 +57,14 @@ extern USBDevice_ USBDevice;
 //================================================================================
 //	Serial over CDC (Serial1 is the physical port)
 
+struct ring_buffer;
+
+#if (RAMEND < 1000)
+#define SERIAL_BUFFER_SIZE 16
+#else
+#define SERIAL_BUFFER_SIZE 64
+#endif
+
 class Serial_ : public Stream
 {
 private:
@@ -43,99 +83,14 @@ public:
 	virtual size_t write(const uint8_t*, size_t);
 	using Print::write; // pull in write(str) and write(buf, size) from Print
 	operator bool();
+
+	volatile uint8_t _rx_buffer_head;
+	volatile uint8_t _rx_buffer_tail;
+	unsigned char _rx_buffer[SERIAL_BUFFER_SIZE];
 };
 extern Serial_ Serial;
 
-//================================================================================
-//================================================================================
-//	Mouse
-
-#define MOUSE_LEFT 1
-#define MOUSE_RIGHT 2
-#define MOUSE_MIDDLE 4
-#define MOUSE_ALL (MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE)
-
-class Mouse_
-{
-private:
-	uint8_t _buttons;
-	void buttons(uint8_t b);
-public:
-	Mouse_(void);
-	void begin(void);
-	void end(void);
-	void click(uint8_t b = MOUSE_LEFT);
-	void move(signed char x, signed char y, signed char wheel = 0);	
-	void press(uint8_t b = MOUSE_LEFT);		// press LEFT by default
-	void release(uint8_t b = MOUSE_LEFT);	// release LEFT by default
-	bool isPressed(uint8_t b = MOUSE_LEFT);	// check LEFT by default
-};
-extern Mouse_ Mouse;
-
-//================================================================================
-//================================================================================
-//	Keyboard
-
-#define KEY_LEFT_CTRL		0x80
-#define KEY_LEFT_SHIFT		0x81
-#define KEY_LEFT_ALT		0x82
-#define KEY_LEFT_GUI		0x83
-#define KEY_RIGHT_CTRL		0x84
-#define KEY_RIGHT_SHIFT		0x85
-#define KEY_RIGHT_ALT		0x86
-#define KEY_RIGHT_GUI		0x87
-
-#define KEY_UP_ARROW		0xDA
-#define KEY_DOWN_ARROW		0xD9
-#define KEY_LEFT_ARROW		0xD8
-#define KEY_RIGHT_ARROW		0xD7
-#define KEY_BACKSPACE		0xB2
-#define KEY_TAB				0xB3
-#define KEY_RETURN			0xB0
-#define KEY_ESC				0xB1
-#define KEY_INSERT			0xD1
-#define KEY_DELETE			0xD4
-#define KEY_PAGE_UP			0xD3
-#define KEY_PAGE_DOWN		0xD6
-#define KEY_HOME			0xD2
-#define KEY_END				0xD5
-#define KEY_CAPS_LOCK		0xC1
-#define KEY_F1				0xC2
-#define KEY_F2				0xC3
-#define KEY_F3				0xC4
-#define KEY_F4				0xC5
-#define KEY_F5				0xC6
-#define KEY_F6				0xC7
-#define KEY_F7				0xC8
-#define KEY_F8				0xC9
-#define KEY_F9				0xCA
-#define KEY_F10				0xCB
-#define KEY_F11				0xCC
-#define KEY_F12				0xCD
-
-//	Low level key report: up to 6 keys and shift, ctrl etc at once
-typedef struct
-{
-	uint8_t modifiers;
-	uint8_t reserved;
-	uint8_t keys[6];
-} KeyReport;
-
-class Keyboard_ : public Print
-{
-private:
-	KeyReport _keyReport;
-	void sendReport(KeyReport* keys);
-public:
-	Keyboard_(void);
-	void begin(void);
-	void end(void);
-	virtual size_t write(uint8_t k);
-	virtual size_t press(uint8_t k);
-	virtual size_t release(uint8_t k);
-	virtual void releaseAll(void);
-};
-extern Keyboard_ Keyboard;
+#define HAVE_CDCSERIAL
 
 //================================================================================
 //================================================================================
@@ -143,36 +98,25 @@ extern Keyboard_ Keyboard;
 //  Implemented in HID.cpp
 //  The list of parameters here needs to match the implementation in HID.cpp
 
-
-typedef struct JoyState 		// Pretty self explanitory. Simple state to store all the joystick parameters
-{
-	uint8_t		xAxis;
-	uint8_t		yAxis;
-	uint8_t		zAxis;
-
-	uint8_t		xRotAxis;
-	uint8_t		yRotAxis;
-	uint8_t		zRotAxis;
-
-	uint8_t		throttle;
-	uint8_t		rudder;
-
-	uint8_t		hatSw1;
-	uint8_t		hatSw2;
-
-	uint32_t	buttons;		// 32 general buttons
-
-} JoyState_t;
-
 class Joystick_
-{
+{	
+	private:
+		uint32_t buttons;
+		uint8_t axes[6];
 	public:
-	Joystick_();
-	void setState(JoyState_t *joySt);
-
+		Joystick_();
+		void ReportState();
+		void SetAxis(int Axis, uint8_t value);
+		void SetButton(int Button, bool value);
+	
+		static const int XAXIS = 0;
+		static const int YAXIS = 1;
+		static const int ZAXIS = 2;
+		static const int RXAXIS = 3;
+		static const int RYAXIS = 4;
+		static const int RZAXIS = 5;
 };
 extern Joystick_ Joystick;
-
 //================================================================================
 //================================================================================
 //	Low level API
